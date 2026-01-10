@@ -4,7 +4,7 @@ Handles authentication and data upload to Garmin Connect
 """
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from garminconnect import Garmin
 import garth
@@ -134,11 +134,11 @@ class GarminClient:
 
                                             # Parse timestamp (in milliseconds)
                                             if 'timestampGMT' in metric:
-                                                timestamp = datetime.fromtimestamp(metric['timestampGMT'] / 1000)
+                                                timestamp = datetime.fromtimestamp(metric['timestampGMT'] / 1000, tz=timezone.utc)
                                             elif 'date' in metric:
-                                                timestamp = datetime.fromtimestamp(metric['date'] / 1000)
+                                                timestamp = datetime.fromtimestamp(metric['date'] / 1000, tz=timezone.utc)
                                             else:
-                                                timestamp = current
+                                                timestamp = current.replace(tzinfo=timezone.utc)
 
                                             weights.append({
                                                 'timestamp': timestamp,
@@ -157,9 +157,9 @@ class GarminClient:
                                     if 'date' in entry:
                                         timestamp = datetime.fromisoformat(entry['date'].replace('Z', '+00:00'))
                                     elif 'timestampGMT' in entry:
-                                        timestamp = datetime.fromtimestamp(entry['timestampGMT'] / 1000)
+                                        timestamp = datetime.fromtimestamp(entry['timestampGMT'] / 1000, tz=timezone.utc)
                                     else:
-                                        timestamp = current
+                                        timestamp = current.replace(tzinfo=timezone.utc)
 
                                     weights.append({
                                         'timestamp': timestamp,
