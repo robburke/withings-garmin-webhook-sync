@@ -188,7 +188,7 @@ class GarminClient:
 
         Args:
             weight_kg: Weight in kilograms
-            timestamp: Timestamp of the measurement (should be timezone-aware)
+            timestamp: Timestamp of the measurement (should be timezone-aware UTC)
             bmi: Body Mass Index (optional, ignored)
 
         Returns:
@@ -200,13 +200,18 @@ class GarminClient:
 
             logger.info(f"Creating FIT file for weight: {weight_kg}kg at {timestamp.isoformat()}")
 
+            # Convert UTC timestamp to local time for FIT file
+            # FIT encoder uses time.mktime() which expects local time
+            local_timestamp = timestamp.astimezone()
+            logger.info(f"Converted to local time: {local_timestamp.isoformat()}")
+
             # Create FIT encoder exactly like withings-sync
             fit = FitEncoderWeight()
             fit.write_file_info()
             fit.write_file_creator()
-            fit.write_device_info(timestamp=timestamp)
+            fit.write_device_info(timestamp=local_timestamp)
             fit.write_weight_scale(
-                timestamp=timestamp,
+                timestamp=local_timestamp,
                 weight=weight_kg,
                 percent_fat=None,
                 percent_hydration=None,
