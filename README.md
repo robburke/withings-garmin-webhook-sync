@@ -16,10 +16,17 @@ Automatically sync weight measurements from your Withings smart scale to Garmin 
 
 - **Withings Account**: With at least one smart scale/body composition device
 - **Garmin Connect Account**: Free account at https://connect.garmin.com
-- **Python 3.8+**: With pip package manager
+- **Python 3.12+**: With pip package manager (Python 3.8+ may work but 3.12+ recommended)
 - **Withings Developer App**: Create at https://developer.withings.com
 - **ngrok Account**: Free account at https://ngrok.com (required for webhook HTTPS endpoint)
 - **Local Machine**: PC/Mac that you can keep running for real-time sync
+
+### Important Dependency Versions
+
+This project requires specific minimum versions of key libraries:
+- **garminconnect**: 0.2.19 or later (earlier versions have API compatibility issues)
+- **garth**: 0.5.1 or later (for proper OAuth token handling)
+- **withings-api**: 2.4.0 or later (Pydantic v2 compatibility)
 
 ## 🔧 Installation
 
@@ -78,13 +85,15 @@ LOG_LEVEL=INFO
 Run the interactive setup script to authorize the application:
 
 ```bash
-python setup.py
+python reauth_withings.py
 ```
 
 This will:
 1. Open your browser to the Withings authorization page
 2. Ask you to approve access to your weight data
 3. Save the refresh token to your `.env` file automatically
+
+**Note**: The script is called `reauth_withings.py` and can be run anytime to refresh your Withings authentication.
 
 ### 6. Install and Configure ngrok
 
@@ -206,7 +215,7 @@ withings-garmin-webhook-sync/
 ├── garmin_client.py        # Garmin Connect API wrapper (auth, fetch, upload)
 ├── deduplicator.py         # Duplicate detection logic with tolerances
 ├── config.py               # Configuration management from .env
-├── setup.py                # Interactive OAuth setup script
+├── reauth_withings.py      # Interactive OAuth setup script
 ├── webhook_manager.py      # CLI utility for webhook management
 ├── requirements.txt        # Python dependencies
 ├── .env.example            # Template for environment variables
@@ -229,7 +238,7 @@ withings-garmin-webhook-sync/
 ### Authentication Issues
 
 **Withings "Invalid Token"**:
-- Run `python setup.py` again to refresh OAuth tokens
+- Run `python reauth_withings.py` again to refresh OAuth tokens
 - Check that `WITHINGS_REFRESH_TOKEN` is set in `.env`
 
 **Garmin Login Failed**:
