@@ -52,7 +52,20 @@ def withings_webhook():
 
     if request.method == 'POST':
         try:
-            data = request.json
+            # Withings sends data as form-encoded, not JSON
+            # Try to get data from form first, fall back to JSON
+            if request.form:
+                data = request.form.to_dict()
+                # Convert string values to integers where needed
+                if 'appli' in data:
+                    data['appli'] = int(data['appli'])
+                if 'startdate' in data:
+                    data['startdate'] = int(data['startdate'])
+                if 'enddate' in data:
+                    data['enddate'] = int(data['enddate'])
+            else:
+                data = request.json
+
             logger.info(f"Received webhook from Withings: {data}")
 
             # Withings sends notifications like:
@@ -108,6 +121,49 @@ def manual_sync():
     except Exception as e:
         logger.error(f"Error in manual sync: {str(e)}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/test/garmin-weights', methods=['GET'])
+def test_garmin_weights():
+    """
+    Test endpoint to verify we can actually read weights from Garmin
+    Usage: GET /test/garmin-weights?days=30
+    """
+    try:
+        from datetime import datetime, timedelta
+
+        days = int(request.args.get('days', 30))
+        logger.info(f"=== TESTING GARMIN WEIGHT FETCH FOR LAST {days} DAYS ===")
+
+        # Test fetching weights from Garmin
+        since = datetime.now() - timedelta(days=days)
+        until = datetime.now()
+
+        logger.info(f"Date range: {since.date()} to {until.date()}")
+        weights = sync_service.garmin.get_weights(since=since, until=until)
+
+        logger.info(f"=== RESULT: Found {len(weights)} weights ===")
+        for w in weights:
+            logger.info(f"  Weight: {w['weight']}kg at {w['timestamp']}")
+
+        return jsonify({
+            'status': 'success',
+            'date_range': {
+                'from': since.isoformat(),
+                'to': until.isoformat(),
+                'days': days
+            },
+            'weights_found': len(weights),
+            'weights': [{'weight': w['weight'], 'timestamp': str(w['timestamp'])} for w in weights]
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error testing Garmin weights: {str(e)}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'error_type': type(e).__name__
+        }), 500
 
 
 if __name__ == '__main__':

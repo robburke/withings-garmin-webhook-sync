@@ -81,14 +81,19 @@ class SyncService:
             synced_count = 0
             for measurement in new_measurements:
                 try:
+                    # Pass BMI if available
+                    bmi = measurement.get('bmi')
+
                     success = self.garmin.add_weight(
                         weight_kg=measurement['weight'],
-                        timestamp=measurement['timestamp']
+                        timestamp=measurement['timestamp'],
+                        bmi=bmi
                     )
                     if success:
                         synced_count += 1
+                        bmi_str = f", BMI {bmi:.2f}" if bmi else ""
                         logger.info(
-                            f"Synced weight: {measurement['weight']}kg at "
+                            f"Synced weight: {measurement['weight']}kg{bmi_str} at "
                             f"{measurement['timestamp'].isoformat()}"
                         )
                 except Exception as e:

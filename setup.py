@@ -5,7 +5,7 @@ Run this once to get your refresh token
 import os
 import sys
 import logging
-from withings_api import WithingsAuth
+from withings_api import WithingsAuth, AuthScope
 from config import Config
 
 logging.basicConfig(level=logging.INFO)
@@ -39,8 +39,8 @@ def setup_withings_oauth():
             consumer_secret=client_secret,
             callback_uri=callback_uri,
             scope=[
-                'user.metrics',  # Access to weight and other measurements
-                'user.activity'   # Optional: activity data
+                AuthScope.USER_METRICS,  # Access to weight and other measurements
+                AuthScope.USER_ACTIVITY   # Optional: activity data
             ]
         )
 

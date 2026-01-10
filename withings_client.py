@@ -1,56 +1,67 @@
-﻿"""
+"""
 Withings API Client
-Handles authentication and data retrieval from Withings
+Handles authentication and data retrieval from Withings using raw requests
+Based on withings-sync implementation to avoid pydantic conflicts
 """
 import logging
-from datetime import datetime, timedelta
+import requests
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict
-from withings_api import WithingsAuth, WithingsApi
-from withings_api.common import MeasureType
 
 logger = logging.getLogger(__name__)
 
+TOKEN_URL = "https://wbsapi.withings.net/v2/oauth2"
+GETMEAS_URL = "https://wbsapi.withings.net/measure?action=getmeas"
+NOTIFY_URL = "https://wbsapi.withings.net/notify"
+
 
 class WithingsClient:
-    """Wrapper for Withings API"""
+    """Wrapper for Withings API using raw requests (no pydantic dependency)"""
 
     def __init__(self, config):
         self.config = config
-        self.api = None
+        self.access_token = None
         self._authenticate()
 
     def _authenticate(self):
         """Authenticate with Withings API"""
         try:
-            # For webhook setup, we need to go through OAuth flow once
-            # After that, we can use refresh tokens
-
             client_id = self.config.get('WITHINGS_CLIENT_ID')
             client_secret = self.config.get('WITHINGS_CLIENT_SECRET')
-
-            # Check if we have a refresh token saved
             refresh_token = self.config.get('WITHINGS_REFRESH_TOKEN')
 
-            if refresh_token:
-                logger.info("Authenticating with Withings using refresh token")
-                auth = WithingsAuth(
-                    client_id=client_id,
-                    consumer_secret=client_secret,
-                    callback_uri=self.config.get('WITHINGS_CALLBACK_URI', 'http://localhost:5000/callback')
-                )
-
-                # Use refresh token to get new credentials
-                credentials = auth.refresh_token(refresh_token)
-                self.api = WithingsApi(credentials)
-
-                # Save new refresh token if it changed
-                if credentials.refresh_token != refresh_token:
-                    logger.info("Refresh token updated")
-                    # TODO: Implement token persistence
-            else:
-                logger.warning("No refresh token found. You need to complete OAuth flow first.")
-                logger.warning("Run setup.py to complete initial authentication")
+            if not refresh_token:
+                logger.warning("No refresh token found. Run initial setup first.")
                 raise ValueError("No refresh token configured. Run initial setup first.")
+
+            logger.info("Authenticating with Withings using refresh token")
+
+            # Refresh the access token
+            params = {
+                "action": "requesttoken",
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+            }
+
+            response = requests.post(TOKEN_URL, params=params, timeout=30)
+            resp_json = response.json()
+
+            status = resp_json.get("status")
+            if status != 0:
+                logger.error(f"Withings API returned error status: {status}")
+                logger.error(f"Response: {resp_json}")
+                raise Exception(f"Withings auth failed with status {status}")
+
+            body = resp_json.get("body", {})
+            self.access_token = body.get("access_token")
+            new_refresh_token = body.get("refresh_token")
+
+            # Update refresh token if it changed
+            if new_refresh_token and new_refresh_token != refresh_token:
+                logger.info("Refresh token updated")
+                self.config.update_env_file('WITHINGS_REFRESH_TOKEN', new_refresh_token)
 
             logger.info("Successfully authenticated with Withings")
 
@@ -67,34 +78,86 @@ class WithingsClient:
             end_timestamp: Unix timestamp for end
 
         Returns:
-            List of measurement dicts with 'timestamp' and 'weight' keys
+            List of measurement dicts with 'timestamp', 'weight', and optionally 'height' and 'bmi' keys
         """
         try:
             logger.info(f"Fetching Withings measurements from {start_timestamp} to {end_timestamp}")
 
-            # Get weight measurements
-            measurements = self.api.measure_get_meas(
-                startdate=start_timestamp,
-                enddate=end_timestamp,
-                meastype=MeasureType.WEIGHT
-            )
+            params = {
+                "action": "getmeas",
+                "access_token": self.access_token,
+                "meastype": 1,  # Weight
+                "category": 1,  # Real measurements
+                "startdate": start_timestamp,
+                "enddate": end_timestamp,
+            }
+
+            response = requests.get(GETMEAS_URL, params=params, timeout=30)
+            resp_json = response.json()
+
+            status = resp_json.get("status")
+            if status == 401:
+                # Token expired, refresh and retry
+                logger.warning("Access token expired, refreshing...")
+                self._authenticate()
+                params["access_token"] = self.access_token
+                response = requests.get(GETMEAS_URL, params=params, timeout=30)
+                resp_json = response.json()
+                status = resp_json.get("status")
+
+            if status != 0:
+                logger.error(f"Withings API returned error status: {status}")
+                raise Exception(f"Withings getmeas failed with status {status}")
+
+            body = resp_json.get("body", {})
+            measuregrps = body.get("measuregrps", [])
 
             results = []
-            for measure_group in measurements.measuregrps:
-                # Each measure group has a date and multiple measures
-                timestamp = datetime.fromtimestamp(measure_group.date)
+            for group in measuregrps:
+                # Get timestamp (Unix timestamp)
+                timestamp_unix = group.get("date")
+                if timestamp_unix:
+                    timestamp = datetime.fromtimestamp(timestamp_unix, tz=timezone.utc)
+                else:
+                    continue
 
-                # Find weight measurement
-                for measure in measure_group.measures:
-                    if measure.type == MeasureType.WEIGHT:
-                        # Withings stores weight with a power-of-10 multiplier
-                        weight_kg = measure.value * (10 ** measure.unit)
+                # Parse measures
+                weight_kg = None
+                height_m = None
 
-                        results.append({
-                            'timestamp': timestamp,
-                            'weight': weight_kg
-                        })
+                for measure in group.get("measures", []):
+                    measure_type = measure.get("type")
+                    value = measure.get("value")
+                    unit = measure.get("unit")
+
+                    if value is None or unit is None:
+                        continue
+
+                    # Calculate actual value
+                    actual_value = value * (10 ** unit)
+
+                    if measure_type == 1:  # Weight in kg
+                        weight_kg = actual_value
+                    elif measure_type == 4:  # Height in meters
+                        height_m = actual_value
+
+                # Only add if we have weight data
+                if weight_kg is not None:
+                    measurement = {
+                        'timestamp': timestamp,
+                        'weight': weight_kg
+                    }
+
+                    # Calculate BMI if we have both weight and height
+                    if height_m is not None and height_m > 0:
+                        bmi = weight_kg / (height_m ** 2)
+                        measurement['bmi'] = bmi
+                        measurement['height'] = height_m
+                        logger.debug(f"Found measurement: {weight_kg}kg, height {height_m}m, BMI {bmi:.2f} at {timestamp}")
+                    else:
                         logger.debug(f"Found measurement: {weight_kg}kg at {timestamp}")
+
+                    results.append(measurement)
 
             logger.info(f"Retrieved {len(results)} weight measurements")
             return results
@@ -134,11 +197,20 @@ class WithingsClient:
         try:
             logger.info(f"Subscribing to Withings webhook at {callback_url}")
 
-            # Subscribe to weight notifications (appli=1)
-            self.api.notify_subscribe(
-                callbackurl=callback_url,
-                appli=1  # 1 = weight
-            )
+            params = {
+                "action": "subscribe",
+                "access_token": self.access_token,
+                "callbackurl": callback_url,
+                "appli": 1,  # Weight
+            }
+
+            response = requests.post(NOTIFY_URL, params=params, timeout=30)
+            resp_json = response.json()
+
+            status = resp_json.get("status")
+            if status != 0:
+                logger.error(f"Withings webhook subscribe failed with status: {status}")
+                raise Exception(f"Subscribe failed with status {status}")
 
             logger.info("Successfully subscribed to Withings webhook")
             return True
@@ -155,8 +227,24 @@ class WithingsClient:
             List of webhook subscriptions
         """
         try:
-            result = self.api.notify_list()
-            return result.profiles if hasattr(result, 'profiles') else []
+            params = {
+                "action": "list",
+                "access_token": self.access_token,
+                "appli": 1,
+            }
+
+            response = requests.post(NOTIFY_URL, params=params, timeout=30)
+            resp_json = response.json()
+
+            status = resp_json.get("status")
+            if status != 0:
+                logger.error(f"Withings webhook list failed with status: {status}")
+                return []
+
+            body = resp_json.get("body", {})
+            profiles = body.get("profiles", [])
+            return profiles
+
         except Exception as e:
             logger.error(f"Failed to list webhooks: {str(e)}")
             return []
@@ -174,10 +262,20 @@ class WithingsClient:
         try:
             logger.info(f"Unsubscribing from webhook: {callback_url}")
 
-            self.api.notify_revoke(
-                callbackurl=callback_url,
-                appli=1
-            )
+            params = {
+                "action": "revoke",
+                "access_token": self.access_token,
+                "callbackurl": callback_url,
+                "appli": 1,
+            }
+
+            response = requests.post(NOTIFY_URL, params=params, timeout=30)
+            resp_json = response.json()
+
+            status = resp_json.get("status")
+            if status != 0:
+                logger.error(f"Withings webhook revoke failed with status: {status}")
+                raise Exception(f"Revoke failed with status {status}")
 
             logger.info("Successfully unsubscribed from webhook")
             return True
