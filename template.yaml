@@ -13,7 +13,8 @@ Parameters:
 
   AlertEmail:
     Type: String
-    Description: Email address for error notifications (required)
+    Default: your-email@example.com
+    Description: Email address for error notifications
 
 Globals:
   Function:
