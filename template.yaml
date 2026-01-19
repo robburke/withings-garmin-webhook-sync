@@ -13,8 +13,7 @@ Parameters:
 
   AlertEmail:
     Type: String
-    Default: rob@robburke.net
-    Description: Email address for error notifications
+    Description: Email address for error notifications (required)
 
 Globals:
   Function:
