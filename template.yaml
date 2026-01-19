@@ -11,6 +11,11 @@ Parameters:
       - prod
     Description: Deployment environment
 
+  AlertEmail:
+    Type: String
+    Default: rob@robburke.net
+    Description: Email address for error notifications
+
 Globals:
   Function:
     Timeout: 60
@@ -99,6 +104,41 @@ Resources:
         AttributeName: ttl
         Enabled: false
 
+  # SNS Topic for error alerts
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub withings-garmin-alerts-${Environment}
+      DisplayName: Withings-Garmin Sync Alerts
+
+  # Email subscription for alerts
+  AlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # CloudWatch Alarm for Lambda errors
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub withings-garmin-sync-errors-${Environment}
+      AlarmDescription: Triggers when the Lambda function has errors
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref WebhookFunction
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
   # Secrets Manager for credentials
   WithingsGarminSecrets:
     Type: AWS::SecretsManager::Secret
@@ -134,3 +174,7 @@ Outputs:
   SecretsArn:
     Description: ARN of the secrets in Secrets Manager
     Value: !Ref WithingsGarminSecrets
+
+  AlertTopicArn:
+    Description: SNS Topic ARN for error alerts
+    Value: !Ref AlertTopic
