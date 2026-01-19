@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Withings to Garmin Webhook Sync - Serverless Edition
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues:
+      - dev
+      - prod
+    Description: Deployment environment
+
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.12
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        TOKEN_TABLE_NAME: !Ref TokenTable
+        SECRETS_ARN: !Ref WithingsGarminSecrets
+
+Resources:
+  # Lambda Function
+  WebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub withings-garmin-sync-${Environment}
+      CodeUri: .
+      Handler: lambda_handler.handler
+      Description: Handles Withings webhooks and syncs to Garmin Connect
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TokenTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:PutSecretValue
+              Resource: !Ref WithingsGarminSecrets
+      Events:
+        # Withings webhook endpoint
+        WebhookPost:
+          Type: Api
+          Properties:
+            Path: /webhook/withings
+            Method: POST
+            RestApiId: !Ref WebhookApi
+        WebhookHead:
+          Type: Api
+          Properties:
+            Path: /webhook/withings
+            Method: HEAD
+            RestApiId: !Ref WebhookApi
+        WebhookGet:
+          Type: Api
+          Properties:
+            Path: /webhook/withings
+            Method: GET
+            RestApiId: !Ref WebhookApi
+        # Health check
+        HealthCheck:
+          Type: Api
+          Properties:
+            Path: /health
+            Method: GET
+            RestApiId: !Ref WebhookApi
+        # Manual sync endpoint
+        ManualSync:
+          Type: Api
+          Properties:
+            Path: /sync/manual
+            Method: POST
+            RestApiId: !Ref WebhookApi
+
+  # API Gateway
+  WebhookApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub withings-garmin-api-${Environment}
+      StageName: !Ref Environment
+      Description: API Gateway for Withings webhook receiver
+
+  # DynamoDB Table for token storage
+  TokenTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub withings-garmin-tokens-${Environment}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: token_type
+          AttributeType: S
+      KeySchema:
+        - AttributeName: token_type
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: false
+
+  # Secrets Manager for credentials
+  WithingsGarminSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub withings-garmin-secrets-${Environment}
+      Description: Credentials for Withings and Garmin APIs
+      SecretString: |
+        {
+          "WITHINGS_CLIENT_ID": "REPLACE_ME",
+          "WITHINGS_CLIENT_SECRET": "REPLACE_ME",
+          "WITHINGS_REFRESH_TOKEN": "REPLACE_ME",
+          "GARMIN_EMAIL": "REPLACE_ME",
+          "GARMIN_PASSWORD": "REPLACE_ME"
+        }
+
+Outputs:
+  WebhookUrl:
+    Description: URL for the Withings webhook endpoint
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/webhook/withings
+
+  HealthCheckUrl:
+    Description: URL for health check endpoint
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/health
+
+  ManualSyncUrl:
+    Description: URL for manual sync endpoint
+    Value: !Sub https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/sync/manual
+
+  TokenTableName:
+    Description: DynamoDB table for token storage
+    Value: !Ref TokenTable
+
+  SecretsArn:
+    Description: ARN of the secrets in Secrets Manager
+    Value: !Ref WithingsGarminSecrets

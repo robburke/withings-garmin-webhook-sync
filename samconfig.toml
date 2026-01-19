@@ -1,0 +1,25 @@
+# SAM CLI configuration file
+# Run 'sam deploy' to deploy with these settings
+
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "withings-garmin-sync"
+resolve_s3 = true
+s3_prefix = "withings-garmin-sync"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+parameter_overrides = "Environment=\"prod\""
+
+[default.build.parameters]
+use_container = true
+
+[dev.deploy.parameters]
+stack_name = "withings-garmin-sync-dev"
+resolve_s3 = true
+s3_prefix = "withings-garmin-sync-dev"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
+parameter_overrides = "Environment=\"dev\""

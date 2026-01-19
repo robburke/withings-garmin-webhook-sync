@@ -1,0 +1,15 @@
+# Lambda deployment requirements
+# These are the same versions as the working local setup - DO NOT CHANGE without testing
+
+# API clients - these exact versions are known to work
+withings-api==2.4.0
+garminconnect==0.2.13
+
+# garth is required by garminconnect for OAuth
+# Let pip resolve the compatible version based on garminconnect's requirements
+
+# AWS SDK - included in Lambda runtime but listed for local testing
+boto3>=1.28.0
+
+# Note: Flask is NOT included - Lambda uses API Gateway instead
+# Note: python-dotenv is NOT included - Lambda uses Secrets Manager instead

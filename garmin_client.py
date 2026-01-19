@@ -1,9 +1,12 @@
 ﻿"""
 Garmin Connect API Client
 Handles authentication and data upload to Garmin Connect
+Supports both local file-based sessions and DynamoDB storage for Lambda
 """
 import logging
 import os
+import json
+import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from garminconnect import Garmin
@@ -12,13 +15,26 @@ import garth
 logger = logging.getLogger(__name__)
 
 
+def is_lambda_environment() -> bool:
+    """Check if running in AWS Lambda"""
+    return bool(os.environ.get('AWS_LAMBDA_FUNCTION_NAME'))
+
+
 class GarminClient:
     """Wrapper for Garmin Connect API"""
 
     def __init__(self, config):
         self.config = config
         self.client = None
-        self.session_dir = os.path.join(os.path.dirname(__file__), '.garmin_session')
+        self.is_lambda = is_lambda_environment()
+
+        if self.is_lambda:
+            # Lambda: use temp dir for garth session files
+            self.session_dir = os.path.join(tempfile.gettempdir(), '.garmin_session')
+        else:
+            # Local: use project directory
+            self.session_dir = os.path.join(os.path.dirname(__file__), '.garmin_session')
+
         self._authenticate()
 
     def _authenticate(self):
@@ -32,6 +48,10 @@ class GarminClient:
 
             # Create session directory if it doesn't exist
             os.makedirs(self.session_dir, exist_ok=True)
+
+            # In Lambda, try to restore session from DynamoDB first
+            if self.is_lambda:
+                self._restore_session_from_dynamodb()
 
             # Try to load existing session
             try:
@@ -64,6 +84,11 @@ class GarminClient:
 
                 garth.save(self.session_dir)
                 logger.info("Successfully authenticated with Garmin Connect (via garth)")
+
+                # In Lambda, persist session to DynamoDB
+                if self.is_lambda:
+                    self._save_session_to_dynamodb()
+
             except Exception as garth_error:
                 logger.error(f"Garth login failed: {str(garth_error)}")
                 raise
@@ -87,6 +112,83 @@ class GarminClient:
         except Exception as e:
             logger.error(f"Failed to authenticate with Garmin: {str(e)}")
             raise
+
+    def _restore_session_from_dynamodb(self):
+        """Restore Garmin session files from DynamoDB to temp directory"""
+        try:
+            import boto3
+
+            table_name = os.environ.get('TOKEN_TABLE_NAME')
+            if not table_name:
+                logger.warning("TOKEN_TABLE_NAME not set, cannot restore session from DynamoDB")
+                return
+
+            dynamodb = boto3.resource('dynamodb')
+            table = dynamodb.Table(table_name)
+
+            response = table.get_item(Key={'token_type': 'garmin_session'})
+
+            if 'Item' in response:
+                session_data = response['Item'].get('session_data')
+                if session_data:
+                    # session_data contains the serialized garth tokens
+                    data = json.loads(session_data)
+
+                    # Write the OAuth tokens to files that garth expects
+                    os.makedirs(self.session_dir, exist_ok=True)
+
+                    if 'oauth1_token' in data:
+                        with open(os.path.join(self.session_dir, 'oauth1_token.json'), 'w') as f:
+                            json.dump(data['oauth1_token'], f)
+
+                    if 'oauth2_token' in data:
+                        with open(os.path.join(self.session_dir, 'oauth2_token.json'), 'w') as f:
+                            json.dump(data['oauth2_token'], f)
+
+                    logger.info("Restored Garmin session from DynamoDB")
+            else:
+                logger.info("No Garmin session found in DynamoDB")
+
+        except Exception as e:
+            logger.warning(f"Failed to restore Garmin session from DynamoDB: {e}")
+
+    def _save_session_to_dynamodb(self):
+        """Save Garmin session files from temp directory to DynamoDB"""
+        try:
+            import boto3
+
+            table_name = os.environ.get('TOKEN_TABLE_NAME')
+            if not table_name:
+                logger.warning("TOKEN_TABLE_NAME not set, cannot save session to DynamoDB")
+                return
+
+            # Read the OAuth token files that garth saved
+            session_data = {}
+
+            oauth1_path = os.path.join(self.session_dir, 'oauth1_token.json')
+            if os.path.exists(oauth1_path):
+                with open(oauth1_path, 'r') as f:
+                    session_data['oauth1_token'] = json.load(f)
+
+            oauth2_path = os.path.join(self.session_dir, 'oauth2_token.json')
+            if os.path.exists(oauth2_path):
+                with open(oauth2_path, 'r') as f:
+                    session_data['oauth2_token'] = json.load(f)
+
+            if session_data:
+                dynamodb = boto3.resource('dynamodb')
+                table = dynamodb.Table(table_name)
+
+                table.put_item(Item={
+                    'token_type': 'garmin_session',
+                    'session_data': json.dumps(session_data),
+                    'updated_at': int(datetime.now().timestamp())
+                })
+
+                logger.info("Saved Garmin session to DynamoDB")
+
+        except Exception as e:
+            logger.error(f"Failed to save Garmin session to DynamoDB: {e}")
 
     def get_weights(self, since: datetime = None, until: datetime = None) -> List[Dict]:
         """
