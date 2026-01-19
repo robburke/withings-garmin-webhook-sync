@@ -2,6 +2,8 @@
 AWS Lambda Handler for Withings to Garmin Webhook Sync
 
 This module adapts the Flask application logic to work with AWS Lambda + API Gateway.
+
+Version: 2026-01-19 10:20 - Fixed pydantic/garth version compatibility
 """
 import json
 import logging

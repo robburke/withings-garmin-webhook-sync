@@ -49,8 +49,14 @@ Thumbs.db
 # Credentials and tokens
 tokens.json
 credentials.json
+secrets.json
+garmin_session_item.json
 .garmin_session/
 
 # AWS SAM
 .aws-sam/
 packaged.yaml
+samconfig.toml
+
+# Virtual environments
+.venv/

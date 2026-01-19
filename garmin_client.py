@@ -57,6 +57,11 @@ class GarminClient:
             try:
                 garth.resume(self.session_dir)
                 logger.info("Loaded existing Garmin session")
+
+                # CRITICAL: Update User-Agent to work with Garmin's Nov 2024 API changes
+                # See: https://github.com/matin/garth/issues/73
+                garth.client.sess.headers['User-Agent'] = 'GCM-iOS-5.7.2.1'
+
                 self.client = Garmin()
                 # Assign the garth client to ensure OAuth1 token is available for uploads
                 self.client.garth = garth.client
@@ -336,7 +341,10 @@ class GarminClient:
             logger.info(f"Uploading FIT file to Garmin Connect ({len(fit.getvalue())} bytes)")
 
             # Use garth.client.upload() exactly like withings-sync
-            garth.client.upload(fit_file)
+            response = garth.client.upload(fit_file)
+
+            # Log the upload response for debugging
+            logger.info(f"Garmin upload response: {response}")
 
             logger.info(f"Successfully uploaded weight to Garmin")
             return True

@@ -1,188 +1,146 @@
 # Withings to Garmin Webhook Sync
 
-Automatically sync weight measurements from your Withings smart scale to Garmin Connect in real-time using webhooks. Built for people who want instant synchronization the moment they step off their scale.
+Automatically sync weight measurements from your Withings smart scale to Garmin Connect in real-time using webhooks. Runs entirely in the cloud on AWS Lambda - no local server required.
 
-## 🚀 Features
+## Features
 
 - **Instant Real-time Sync**: Uses Withings webhooks to sync weight measurements immediately when you step on your scale
+- **Fully Serverless**: Runs on AWS Lambda - no local machine needed, works 24/7
 - **Smart Duplicate Prevention**: Prevents duplicate entries using configurable timestamp (±2 min) and weight (±0.1 kg) tolerances
 - **Safety Limits**: Maximum 5 entries per sync to prevent accidental mass uploads
-- **Manual Sync**: Trigger manual syncs for historical data (last N days)
-- **Comprehensive Logging**: All operations logged to both file and console
-- **Automatic Token Refresh**: Withings OAuth tokens automatically refreshed as needed
-- **Health Check Endpoint**: Monitor server status
+- **Manual Sync**: Trigger manual syncs for historical data via API endpoint
+- **Automatic Token Refresh**: OAuth tokens automatically refreshed as needed
+- **Secure Credential Storage**: Uses AWS Secrets Manager and DynamoDB
 
-## 📋 Prerequisites
+## Architecture
 
-- **Withings Account**: With at least one smart scale/body composition device
-- **Garmin Connect Account**: Free account at https://connect.garmin.com
-- **Python 3.12+**: With pip package manager (Python 3.8+ may work but 3.12+ recommended)
+```
+┌─────────────┐      Webhook       ┌─────────────┐      Upload       ┌─────────────┐
+│   Withings  │ ─────────────────> │ AWS Lambda  │ ─────────────────> │   Garmin    │
+│    Scale    │                    │ + API GW    │                    │   Connect   │
+└─────────────┘                    └─────────────┘                    └─────────────┘
+                                          │
+                                          ├── DynamoDB (Garmin session)
+                                          └── Secrets Manager (credentials)
+```
+
+## Prerequisites
+
+- **AWS Account**: With permissions to create Lambda, API Gateway, DynamoDB, Secrets Manager
+- **AWS CLI**: Configured with your credentials (`aws configure`)
+- **AWS SAM CLI**: Install from https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html
+- **Python 3.12**: For local bootstrap scripts
+- **Withings Account**: With at least one smart scale
 - **Withings Developer App**: Create at https://developer.withings.com
-- **ngrok Account**: Free account at https://ngrok.com (required for webhook HTTPS endpoint)
-- **Local Machine**: PC/Mac that you can keep running for real-time sync
+- **Garmin Connect Account**: Free account at https://connect.garmin.com
 
-### Important Dependency Versions
+## Quick Start
 
-This project requires specific minimum versions of key libraries:
-- **garminconnect**: 0.2.19 or later (earlier versions have API compatibility issues)
-- **garth**: 0.5.1 or later (for proper OAuth token handling)
-- **withings-api**: 2.4.0 or later (Pydantic v2 compatibility)
-
-## 🔧 Installation
-
-### 1. Clone the Repository
+### 1. Clone and Deploy
 
 ```bash
 git clone https://github.com/robburke/withings-garmin-webhook-sync.git
 cd withings-garmin-webhook-sync
+
+# Build and deploy to AWS
+sam build
+sam deploy --guided
 ```
 
-### 2. Install Python Dependencies
+During guided deployment:
+- Stack Name: `withings-garmin-sync`
+- Region: Choose your preferred AWS region
+- Accept defaults for other options
+
+Note your API Gateway URL from the outputs (e.g., `https://abc123.execute-api.us-east-1.amazonaws.com/prod`)
+
+### 2. Configure Credentials
+
+Create a `secrets.json` file (DO NOT commit this):
+
+```json
+{
+  "WITHINGS_CLIENT_ID": "your_withings_client_id",
+  "WITHINGS_CLIENT_SECRET": "your_withings_client_secret",
+  "WITHINGS_REFRESH_TOKEN": "your_withings_refresh_token",
+  "GARMIN_EMAIL": "your_garmin_email@example.com",
+  "GARMIN_PASSWORD": "your_garmin_password"
+}
+```
+
+Upload to AWS Secrets Manager:
 
 ```bash
+aws secretsmanager put-secret-value \
+  --secret-id withings-garmin-secrets-prod \
+  --secret-string file://secrets.json \
+  --region YOUR_REGION
+```
+
+### 3. Bootstrap Garmin Session
+
+Garmin requires MFA authentication which can't be done in Lambda. Run the bootstrap script locally:
+
+```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Create Withings Developer Application
-
-1. Go to https://developer.withings.com/dashboard
-2. Click "Create an app"
-3. Fill in the details:
-   - **Application Name**: `Garmin Sync` (or your preferred name)
-   - **Description**: Personal weight sync application
-   - **Callback URI**: `http://localhost:5000/callback`
-   - **Application Website**: Can use your GitHub repo URL
-4. Note your **Client ID** and **Client Secret**
-
-### 4. Configure Environment Variables
-
-```bash
-# Copy the example configuration
+# Create .env file with your Garmin credentials
 cp .env.example .env
+# Edit .env with GARMIN_EMAIL and GARMIN_PASSWORD
 
-# Edit .env with your credentials
-# - Add your Withings Client ID and Client Secret
-# - Add your Garmin Connect email and password
+# Bootstrap session (will open browser for MFA if needed)
+python bootstrap_garmin.py
 ```
 
-Your `.env` file should look like:
+This authenticates with Garmin and uploads the session to DynamoDB.
 
-```bash
-WITHINGS_CLIENT_ID=your_client_id_here
-WITHINGS_CLIENT_SECRET=your_client_secret_here
-WITHINGS_CALLBACK_URI=http://localhost:5000/callback
-WITHINGS_REFRESH_TOKEN=
+### 4. Get Withings Refresh Token
 
-GARMIN_EMAIL=your_garmin_email@example.com
-GARMIN_PASSWORD=your_garmin_password
-
-PORT=5000
-LOG_LEVEL=INFO
-```
-
-### 5. Complete Withings OAuth Authentication
-
-Run the interactive setup script to authorize the application:
+If you don't have a Withings refresh token yet:
 
 ```bash
 python reauth_withings.py
 ```
 
-This will:
-1. Open your browser to the Withings authorization page
-2. Ask you to approve access to your weight data
-3. Save the refresh token to your `.env` file automatically
+This opens a browser for Withings OAuth and saves the refresh token to `.env`. Then update Secrets Manager with the new token.
 
-**Note**: The script is called `reauth_withings.py` and can be run anytime to refresh your Withings authentication.
-
-### 6. Install and Configure ngrok
-
-Withings webhooks require an HTTPS endpoint. ngrok provides a secure tunnel to your local server.
-
-1. Sign up at https://ngrok.com
-2. Download and install ngrok
-3. Authenticate ngrok with your token:
-   ```bash
-   ngrok config add-authtoken YOUR_NGROK_TOKEN
-   ```
-
-4. Start ngrok tunnel (in a separate terminal):
-   ```bash
-   ngrok http 5000
-   ```
-
-5. Note your ngrok HTTPS URL (e.g., `https://abc123.ngrok.io`)
-
-### 7. Start the Flask Server
-
-In your main terminal:
+### 5. Subscribe Withings Webhook
 
 ```bash
-python app.py
+python webhook_manager.py subscribe https://YOUR-API-GATEWAY-URL/prod/webhook/withings
 ```
 
-You should see:
-```
-Starting Withings-Garmin Webhook Sync server on port 5000
-Webhook URL will be: http://localhost:5000/webhook/withings
-Don't forget to expose this with ngrok!
-```
+### 6. Done! Test It
 
-### 8. Subscribe to Withings Webhooks
-
-Use the webhook manager to subscribe to weight measurement notifications:
+Step on your scale, or trigger a manual sync:
 
 ```bash
-python webhook_manager.py subscribe https://your-ngrok-url.ngrok.io/webhook/withings
+curl -X POST https://YOUR-API-GATEWAY-URL/prod/sync/manual
 ```
 
-Replace `your-ngrok-url` with your actual ngrok URL from step 6.
+## Endpoints
 
-To verify subscription:
-```bash
-python webhook_manager.py list
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/webhook/withings` | POST | Receives Withings notifications |
+| `/webhook/withings` | HEAD/GET | Withings subscription verification |
+| `/sync/manual` | POST | Manual sync for last 7 days |
 
-## 🎯 Usage
+## Monitoring
 
-### Automatic Sync (Real-time)
-
-Once everything is set up:
-
-1. Keep the Flask server running (`python app.py`)
-2. Keep ngrok running (`ngrok http 5000`)
-3. Step on your Withings scale
-4. Weight automatically appears in Garmin Connect within seconds!
-
-Check the console or `sync.log` file to see the sync activity.
-
-### Manual Sync
-
-To sync historical data from the last 7 days:
+View Lambda logs:
 
 ```bash
-curl -X POST http://localhost:5000/sync/manual
+aws logs tail '/aws/lambda/withings-garmin-sync-prod' --region YOUR_REGION --follow
 ```
 
-To sync a custom number of days (e.g., last 30 days):
-
-```bash
-curl -X POST http://localhost:5000/sync/manual?days=30
-```
-
-### Health Check
-
-Verify the server is running:
-
-```bash
-curl http://localhost:5000/health
-```
-
-## ⚙️ Configuration
+## Configuration
 
 ### Deduplication Settings
 
-Edit `deduplicator.py` to adjust duplicate detection:
+Edit `deduplicator.py`:
 
 ```python
 DEFAULT_TIME_TOLERANCE = 120  # seconds (±2 minutes)
@@ -191,145 +149,127 @@ DEFAULT_WEIGHT_TOLERANCE = 0.1  # kg (±100g)
 
 ### Safety Limits
 
-Edit `sync_service.py` to change the maximum entries per sync:
+Edit `sync_service.py`:
 
 ```python
 MAX_ENTRIES_PER_SYNC = 5  # Maximum weight entries to sync at once
 ```
 
-### Duplicate Detection Window
+## Important: Dependency Constraints
 
-Edit `sync_service.py` to change how far back to check for duplicates:
+There is a pydantic version conflict between libraries. The requirements are pinned to specific versions that work together:
 
-```python
-lookback_days = 30  # Check last 30 days of Garmin data
+```
+withings-api==2.4.0
+garminconnect==0.2.19
+garth>=0.4.46,<0.5.0
+pydantic>=1.10.12,<2.0.0
 ```
 
-## 📁 Project Structure
+**DO NOT upgrade garth to 0.5.x** - it requires pydantic v2 which is incompatible with withings-api.
+
+## Troubleshooting
+
+### Weights Not Appearing in Garmin
+
+The most common cause is the User-Agent issue. Garmin changed their API in November 2024 to reject old user agents. The code includes a fix for this, but if you're still having issues:
+
+1. Check Lambda logs for empty `[]` responses from Garmin
+2. Ensure `garmin_client.py` has the User-Agent fix: `garth.client.sess.headers['User-Agent'] = 'GCM-iOS-5.7.2.1'`
+
+### Garmin MFA Issues
+
+Lambda can't handle interactive MFA. You must bootstrap the session locally:
+
+```bash
+python bootstrap_garmin.py
+```
+
+### Withings Webhook Not Triggering
+
+The Withings developer portal "callback URL" is for OAuth, NOT webhooks. You must subscribe to webhooks separately:
+
+```bash
+python webhook_manager.py subscribe https://YOUR-URL/prod/webhook/withings
+python webhook_manager.py list  # Verify subscription
+```
+
+### pydantic ImportError
+
+If you see `cannot import name 'ValidationInfo' from 'pydantic'`, you've upgraded garth too high. Pin it:
+
+```
+garth>=0.4.46,<0.5.0
+```
+
+## Project Structure
 
 ```
 withings-garmin-webhook-sync/
-├── app.py                  # Main Flask application with webhook endpoints
-├── sync_service.py         # Core sync logic orchestrating Withings → Garmin
-├── withings_client.py      # Withings API wrapper (OAuth, measurements, webhooks)
-├── garmin_client.py        # Garmin Connect API wrapper (auth, fetch, upload)
-├── deduplicator.py         # Duplicate detection logic with tolerances
-├── config.py               # Configuration management from .env
-├── reauth_withings.py      # Interactive OAuth setup script
-├── webhook_manager.py      # CLI utility for webhook management
+├── template.yaml           # AWS SAM infrastructure definition
+├── lambda_handler.py       # Lambda entry point
+├── sync_service.py         # Core sync logic
+├── withings_client.py      # Withings API wrapper
+├── garmin_client.py        # Garmin API wrapper (includes User-Agent fix)
+├── token_storage.py        # DynamoDB token persistence
+├── config.py               # Configuration (auto-detects Lambda vs local)
+├── deduplicator.py         # Duplicate detection logic
+├── fit_encoder.py          # FIT file format encoder
+├── bootstrap_garmin.py     # Local script to bootstrap Garmin session
+├── webhook_manager.py      # CLI for webhook management
+├── reauth_withings.py      # Interactive Withings OAuth setup
 ├── requirements.txt        # Python dependencies
-├── .env.example            # Template for environment variables
-├── .gitignore              # Git ignore rules (includes .env)
-└── sync.log                # Application log file (created on first run)
+├── requirements-lambda.txt # Lambda-specific dependencies
+└── .claude/claude.md       # Development notes and learnings
 ```
 
-## 🔍 Troubleshooting
+## Local Development (Optional)
 
-### Webhook Not Receiving Data
-
-1. **Check ngrok is running**: Verify the HTTPS URL is active
-2. **Verify subscription**: Run `python webhook_manager.py list`
-3. **Check Flask logs**: Look at console output or `sync.log`
-4. **Test webhook endpoint**:
-   ```bash
-   curl https://your-ngrok-url.ngrok.io/webhook/withings
-   ```
-
-### Authentication Issues
-
-**Withings "Invalid Token"**:
-- Run `python reauth_withings.py` again to refresh OAuth tokens
-- Check that `WITHINGS_REFRESH_TOKEN` is set in `.env`
-
-**Garmin Login Failed**:
-- Verify email/password in `.env` are correct
-- Check if Garmin Connect requires 2FA (not currently supported)
-- Try logging into Garmin Connect website manually first
-
-### Duplicates Still Appearing
-
-- Increase time/weight tolerances in `deduplicator.py`
-- Check if Garmin entries are in different units (kg vs lbs)
-- Review logs to see what's being detected as duplicates
-
-### ngrok URL Changes
-
-Free ngrok URLs change each time you restart ngrok. When this happens:
-
-1. Note your new ngrok URL
-2. Unsubscribe old webhook:
-   ```bash
-   python webhook_manager.py unsubscribe
-   ```
-3. Subscribe with new URL:
-   ```bash
-   python webhook_manager.py subscribe https://new-ngrok-url.ngrok.io/webhook/withings
-   ```
-
-**Pro Tip**: ngrok paid plans offer permanent URLs
-
-## 🔒 Security Notes
-
-- **Credentials Storage**: All credentials stored in `.env` (gitignored, never committed)
-- **Garmin Password**: Stored in plaintext locally (limitation of unofficial API)
-- **HTTPS Required**: Withings webhooks require HTTPS (provided by ngrok)
-- **Token Refresh**: Withings tokens automatically refreshed and updated
-- **Local Only**: This runs on your local machine, no cloud services involved
-
-## 🛠️ Development
-
-### Running Tests
+If you want to run locally instead of Lambda:
 
 ```bash
-# Test manual sync
-curl -X POST http://localhost:5000/sync/manual?days=1
+# Install dependencies
+pip install -r requirements.txt
 
-# Check health endpoint
-curl http://localhost:5000/health
+# Configure .env
+cp .env.example .env
+# Edit with your credentials
 
-# View logs
-tail -f sync.log
+# Start Flask server
+python app.py
+
+# In another terminal, start ngrok
+ngrok http 5000
+
+# Subscribe webhook to ngrok URL
+python webhook_manager.py subscribe https://YOUR-NGROK-URL/webhook/withings
 ```
 
-### Unsubscribing from Webhooks
+## Security
 
-To stop receiving webhook notifications:
+- Credentials stored in AWS Secrets Manager (encrypted)
+- Garmin session stored in DynamoDB (encrypted at rest)
+- API Gateway provides HTTPS automatically
+- Never commit `.env`, `secrets.json`, or session files
 
-```bash
-python webhook_manager.py unsubscribe
-```
+## Costs
 
-## 📝 How It Works
+AWS Lambda free tier includes 1M requests/month and 400,000 GB-seconds of compute. This application uses minimal resources - expect costs under $1/month for typical personal use.
 
-1. **User Steps on Scale**: Withings scale measures weight
-2. **Webhook Notification**: Withings sends POST to your webhook endpoint
-3. **Fetch Measurement**: App retrieves measurement data from Withings API
-4. **Duplicate Check**: Compares against last 30 days of Garmin weights
-5. **Filter & Upload**: New measurements (max 5) uploaded to Garmin Connect
-6. **Instant Sync**: Weight appears in Garmin Connect immediately
+## Credits
 
-## 🤝 Credits
+- **withings-api**: Official Python library by Withings
+- **garminconnect**: Community-maintained Garmin Connect library
+- **garth**: Garmin authentication library
 
-- **Withings API**: Official Python library by Withings
-- **Garmin Connect**: Community-maintained `garminconnect` library
-- **ngrok**: Secure tunneling service for local webhooks
-
-## ⚠️ Disclaimer
+## Disclaimer
 
 This application uses an unofficial Garmin Connect library. While it works reliably, it's not endorsed by Garmin. Use at your own risk.
 
-The official Withings → Garmin sync exists but may have delays. This project is for users who want instant synchronization.
-
-## 📧 Support
-
-Created by Rob Burke (rob@robburke.net)
-
-For issues or questions, please open an issue on GitHub.
-
-## 📄 License
+## License
 
 MIT License - feel free to use and modify for personal use.
 
 ---
 
-**Built for impatient people who want their weight data synced instantly!** ⚡
+**Built for impatient people who want their weight data synced instantly - without running anything locally!**

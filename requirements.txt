@@ -2,8 +2,11 @@
 Flask==3.0.0
 
 # API clients
+# NOTE: withings-api requires pydantic<2.0, so we pin garth to 0.4.x which supports pydantic v1
 withings-api==2.4.0
-garminconnect==0.2.13
+garminconnect==0.2.19
+garth>=0.4.46,<0.5.0
+pydantic>=1.10.12,<2.0.0
 
 # Configuration
 python-dotenv==1.0.0

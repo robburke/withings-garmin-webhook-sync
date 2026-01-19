@@ -1,12 +1,13 @@
 # Lambda deployment requirements
 # These are the same versions as the working local setup - DO NOT CHANGE without testing
 
-# API clients - these exact versions are known to work
+# API clients - these versions are known to work
+# IMPORTANT: garminconnect must be 0.2.19+ per CLAUDE.md
+# NOTE: withings-api requires pydantic<2.0, so we pin garth to 0.4.x which supports pydantic v1
 withings-api==2.4.0
-garminconnect==0.2.13
-
-# garth is required by garminconnect for OAuth
-# Let pip resolve the compatible version based on garminconnect's requirements
+garminconnect==0.2.19
+garth>=0.4.46,<0.5.0
+pydantic>=1.10.12,<2.0.0
 
 # AWS SDK - included in Lambda runtime but listed for local testing
 boto3>=1.28.0
