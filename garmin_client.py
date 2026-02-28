@@ -70,6 +70,11 @@ class GarminClient:
                     # Try a simple API call to verify the session works
                     self.client.get_full_name()
                     logger.info("Successfully authenticated with Garmin Connect (using saved session)")
+                    # Persist back to DynamoDB in case garth auto-refreshed the OAuth2 tokens
+                    # (garth refreshes in memory but doesn't trigger _save_session_to_dynamodb)
+                    if self.is_lambda:
+                        garth.save(self.session_dir)  # write refreshed tokens to /tmp
+                        self._save_session_to_dynamodb()  # then persist to DynamoDB
                     return
                 except Exception as verify_error:
                     logger.info(f"Session exists but is invalid: {str(verify_error)}")
@@ -86,6 +91,9 @@ class GarminClient:
 
                 # Configure garth for all required domains
                 garth.client.domain = "garmin.com"
+
+                # CRITICAL: Set User-Agent after login too (Garmin Nov 2024 API change)
+                garth.client.sess.headers['User-Agent'] = 'GCM-iOS-5.7.2.1'
 
                 garth.save(self.session_dir)
                 logger.info("Successfully authenticated with Garmin Connect (via garth)")

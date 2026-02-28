@@ -87,8 +87,9 @@ def upload_session_to_dynamodb():
         print("Error: No session files found")
         return False
 
-    # Upload to DynamoDB
-    table_name = 'withings-garmin-sync-tokens'  # Must match template.yaml
+    # Upload to DynamoDB - use TOKEN_TABLE_NAME env var or default to prod table name
+    # Table name matches template.yaml: withings-garmin-tokens-${Environment}
+    table_name = os.environ.get('TOKEN_TABLE_NAME', 'withings-garmin-tokens-prod')
 
     print(f"\nUploading session to DynamoDB table: {table_name}")
 
