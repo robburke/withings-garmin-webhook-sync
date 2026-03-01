@@ -78,3 +78,56 @@ Session exists but is invalid
 Authenticating with Garmin Connect as ...
 ```
 This means Lambda is falling back to password login and the session in DynamoDB is stale or missing.
+
+---
+
+## 2026-03-01: Withings Webhook Subscription Missing
+
+### Symptoms
+- Scale measurements not syncing automatically
+- Manual sync works fine (`curl -X POST .../sync/manual`)
+- No Lambda invocations in CloudWatch around the time of the measurement
+
+### Root Cause
+
+The Withings webhook subscription was gone — Withings had no callback URL to notify when a measurement was taken, so Lambda was never invoked. The subscription likely disappeared due to repeated delivery failures during the February outage.
+
+### Diagnosis
+
+```bash
+python webhook_manager.py list
+# Shows: "No active webhooks found."
+```
+
+### Fix
+
+Re-subscribe the webhook:
+
+```bash
+python webhook_manager.py subscribe https://j7ebm5kb9l.execute-api.ca-central-1.amazonaws.com/prod/webhook/withings
+```
+
+Verify it stuck:
+
+```bash
+python webhook_manager.py list
+# Should show the Lambda URL as an active subscription
+```
+
+### If This Happens Again
+
+**First thing to check when sync stops:** run `python webhook_manager.py list`.
+
+- If "No active webhooks found" → re-subscribe (see above)
+- If subscription is listed → check CloudWatch logs and Garmin session (see Feb 2026 fix above)
+
+Note: the local `.env` `WITHINGS_REFRESH_TOKEN` may be stale if Lambda has been auto-refreshing for a while. If `webhook_manager.py` fails with `invalid refresh_token`, pull the current token from Secrets Manager:
+
+```bash
+aws --region ca-central-1 secretsmanager get-secret-value \
+  --secret-id withings-garmin-secrets-prod \
+  --query SecretString --output text \
+  | python -c "import sys,json; d=json.load(sys.stdin); print(d['WITHINGS_REFRESH_TOKEN'])"
+```
+
+Then update `WITHINGS_REFRESH_TOKEN` in `.env` with that value.
