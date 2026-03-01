@@ -33,8 +33,8 @@ def subscribe_webhook(client: WithingsClient, callback_url: str):
     print(f"\nSubscribing to webhook with URL: {callback_url}")
 
     if not callback_url.startswith('https://'):
-        print("\n⚠️  WARNING: Withings requires HTTPS URLs for webhooks!")
-        print("Make sure your ngrok URL uses HTTPS (it should by default)\n")
+        print("\n[WARNING] Withings requires HTTPS URLs for webhooks!")
+        print("Make sure your URL uses HTTPS\n")
 
         response = input("Continue anyway? (y/n): ").strip().lower()
         if response != 'y':
@@ -43,13 +43,12 @@ def subscribe_webhook(client: WithingsClient, callback_url: str):
 
     try:
         client.subscribe_webhook(callback_url)
-        print("\n✓ Successfully subscribed to webhook!")
+        print("\n[OK] Successfully subscribed to webhook!")
         print(f"\nWithings will now send notifications to: {callback_url}")
-        print("\nMake sure your Flask server is running at this URL!")
         return True
 
     except Exception as e:
-        print(f"\n✗ Failed to subscribe: {str(e)}")
+        print(f"\n[FAIL] Failed to subscribe: {str(e)}")
         return False
 
 
@@ -59,11 +58,11 @@ def unsubscribe_webhook(client: WithingsClient, callback_url: str):
 
     try:
         client.unsubscribe_webhook(callback_url)
-        print("\n✓ Successfully unsubscribed from webhook!")
+        print("\n[OK] Successfully unsubscribed from webhook!")
         return True
 
     except Exception as e:
-        print(f"\n✗ Failed to unsubscribe: {str(e)}")
+        print(f"\n[FAIL] Failed to unsubscribe: {str(e)}")
         return False
 
 
@@ -76,11 +75,11 @@ Examples:
   # List active webhooks
   python webhook_manager.py list
 
-  # Subscribe to webhook (get ngrok URL from: ngrok http 5000)
-  python webhook_manager.py subscribe https://abc123.ngrok.io/webhook/withings
+  # Subscribe to webhook (use your Lambda API Gateway URL)
+  python webhook_manager.py subscribe https://j7ebm5kb9l.execute-api.ca-central-1.amazonaws.com/prod/webhook/withings
 
   # Unsubscribe from webhook
-  python webhook_manager.py unsubscribe https://abc123.ngrok.io/webhook/withings
+  python webhook_manager.py unsubscribe https://j7ebm5kb9l.execute-api.ca-central-1.amazonaws.com/prod/webhook/withings
         """
     )
 
@@ -91,7 +90,7 @@ Examples:
 
     # Subscribe command
     subscribe_parser = subparsers.add_parser('subscribe', help='Subscribe to webhook notifications')
-    subscribe_parser.add_argument('url', help='Your public HTTPS callback URL (e.g., from ngrok)')
+    subscribe_parser.add_argument('url', help='Your Lambda API Gateway HTTPS callback URL')
 
     # Unsubscribe command
     unsubscribe_parser = subparsers.add_parser('unsubscribe', help='Unsubscribe from webhook')
@@ -108,7 +107,7 @@ Examples:
         config = Config()
         withings_client = WithingsClient(config)
     except Exception as e:
-        print(f"\n✗ Failed to initialize Withings client: {str(e)}")
+        print(f"\n[FAIL] Failed to initialize Withings client: {str(e)}")
         print("\nMake sure you have:")
         print("1. Completed initial setup (run: python setup.py)")
         print("2. Set all required environment variables in .env file")
@@ -124,10 +123,9 @@ Examples:
             print("\n" + "=" * 80)
             print("NEXT STEPS")
             print("=" * 80)
-            print("\n1. Keep your Flask server running (python app.py)")
-            print("2. Keep ngrok running to maintain the tunnel")
-            print("3. Step on your Withings scale!")
-            print("4. Check the logs to see the sync in action")
+            print("\n1. Step on your Withings scale!")
+            print("2. Check Lambda logs to confirm sync:")
+            print("   aws logs tail --log-group-name '/aws/lambda/withings-garmin-sync-prod' --region ca-central-1 --follow")
             print("\n" + "=" * 80 + "\n")
 
     elif args.command == 'unsubscribe':
