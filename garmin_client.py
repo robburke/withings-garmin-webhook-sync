@@ -62,16 +62,23 @@ class GarminClient:
                 # See: https://github.com/matin/garth/issues/73
                 garth.client.sess.headers['User-Agent'] = 'GCM-iOS-5.7.2.1'
 
+                # Proactively refresh OAuth2 token if expired using OAuth1 credentials.
+                # garth does NOT auto-refresh when Garmin returns empty body (instead of 401),
+                # so we must check explicitly. OAuth1 tokens are valid for ~1 year.
+                if hasattr(garth.client, 'oauth2_token') and garth.client.oauth2_token.expired:
+                    logger.info("OAuth2 token expired, refreshing via OAuth1...")
+                    garth.client.refresh_oauth2()
+                    logger.info(f"OAuth2 token refreshed, expires at: {garth.client.oauth2_token.expires_at}")
+
                 self.client = Garmin()
                 # Assign the garth client to ensure OAuth1 token is available for uploads
                 self.client.garth = garth.client
-                # Verify session is still valid by trying to use it
+                # Verify session is still valid by making a real API call
                 try:
-                    # Try a simple API call to verify the session works
-                    self.client.get_full_name()
+                    # Use connectapi directly - get_full_name() returns None without hitting API
+                    garth.client.connectapi('/userprofile-service/socialProfile')
                     logger.info("Successfully authenticated with Garmin Connect (using saved session)")
-                    # Persist back to DynamoDB in case garth auto-refreshed the OAuth2 tokens
-                    # (garth refreshes in memory but doesn't trigger _save_session_to_dynamodb)
+                    # Persist back to DynamoDB — captures any refreshed OAuth2 tokens
                     if self.is_lambda:
                         garth.save(self.session_dir)  # write refreshed tokens to /tmp
                         self._save_session_to_dynamodb()  # then persist to DynamoDB
