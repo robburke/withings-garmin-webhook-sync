@@ -30,6 +30,15 @@ wheels/
 *.log
 sync.log
 
+# Operational state (written by sync_daemon.py)
+last_sync_timestamp.json
+
+# Claude Code local settings
+.claude/
+
+# Stale debug artifacts
+debug_weight_*.fit
+
 # IDE
 .vscode/
 .idea/

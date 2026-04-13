@@ -1,128 +1,126 @@
-﻿"""
-Sync Service - Business logic for syncing weight data from Withings to Garmin
 """
+Sync Service - poll Withings for new weight measurements and upload them
+to Garmin Connect via the upload-weight-cli subprocess.
+
+This replaces the previous Lambda-style sync_service which dedup'd against
+existing Garmin weigh-ins. We now use a local last_sync_timestamp file as
+the primary watermark, and the Deduplicator as in-batch defense-in-depth
+in case Withings ever returns the same measurement twice in one response.
+"""
+
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List
-from withings_client import WithingsClient
-from garmin_client import GarminClient
+
 from deduplicator import Deduplicator
+from withings_client import WithingsClient
+import garmin_writer
 
 logger = logging.getLogger(__name__)
 
 
 class SyncService:
-    """Handles the syncing logic between Withings and Garmin"""
+    """Pull-from-Withings, push-to-Garmin orchestration."""
 
     MAX_ENTRIES_PER_SYNC = 5  # Safety limit
 
     def __init__(self, config):
         self.config = config
         self.withings = WithingsClient(config)
-        self.garmin = GarminClient(config)
         self.deduplicator = Deduplicator()
 
-    def sync_weights(self, user_id: str = None, start_date: int = None, end_date: int = None) -> Dict:
-        """
-        Sync weight measurements from Withings to Garmin
+    def sync_since(self, since: datetime, dry_run: bool = False) -> Dict:
+        """Fetch Withings measurements newer than `since` and upload to Garmin.
 
         Args:
-            user_id: Withings user ID (optional, for webhook context)
-            start_date: Unix timestamp for start date (optional)
-            end_date: Unix timestamp for end date (optional)
+            since: timezone-aware datetime; only measurements strictly later are processed
+            dry_run: if True, fetch and log but do not write to Garmin
 
         Returns:
-            Dict with sync results
+            Dict with synced/skipped counts, processed measurements, and a high-water-mark
+            timestamp the caller can persist as the new last_sync.
         """
-        try:
-            # If specific date range provided, use it; otherwise get last 7 days
-            if start_date and end_date:
-                withings_measurements = self.withings.get_measurements(start_date, end_date)
-            else:
-                # Default: get measurements from last 7 days
-                withings_measurements = self.withings.get_recent_measurements(days=7)
+        if since.tzinfo is None:
+            raise ValueError("`since` must be timezone-aware")
 
-            if not withings_measurements:
-                logger.info("No new measurements found in Withings")
-                return {'synced': 0, 'skipped': 0, 'message': 'No new measurements'}
+        now = datetime.now(timezone.utc)
+        start_ts = int(since.timestamp())
+        end_ts = int(now.timestamp())
 
-            logger.info(f"Found {len(withings_measurements)} measurements from Withings")
+        logger.info(
+            "Fetching Withings measurements from %s (%d) to %s (%d)",
+            since.isoformat(), start_ts, now.isoformat(), end_ts,
+        )
 
-            # Get recent Garmin weigh-ins for duplicate detection
-            # Look back 30 days to be safe
-            lookback_date = datetime.now() - timedelta(days=30)
-            garmin_weights = self.garmin.get_weights(since=lookback_date)
+        measurements = self.withings.get_measurements(start_ts, end_ts)
 
-            logger.info(f"Found {len(garmin_weights)} existing weights in Garmin")
+        # Withings' getmeas can return measurements at the boundary; filter strictly later.
+        new_measurements = [m for m in measurements if m["timestamp"] > since]
 
-            # Filter out duplicates
-            new_measurements = self.deduplicator.filter_duplicates(
-                withings_measurements,
-                garmin_weights
-            )
+        # In-batch dedup (defense in depth)
+        new_measurements = self.deduplicator.filter_duplicates(new_measurements, [])
 
-            if not new_measurements:
-                logger.info("All measurements already exist in Garmin")
-                return {
-                    'synced': 0,
-                    'skipped': len(withings_measurements),
-                    'message': 'All measurements already synced'
-                }
-
-            # Apply safety limit
-            if len(new_measurements) > self.MAX_ENTRIES_PER_SYNC:
-                logger.warning(
-                    f"Found {len(new_measurements)} new measurements, "
-                    f"limiting to {self.MAX_ENTRIES_PER_SYNC} for safety"
-                )
-                new_measurements = new_measurements[:self.MAX_ENTRIES_PER_SYNC]
-
-            # Sync to Garmin
-            synced_count = 0
-            for measurement in new_measurements:
-                try:
-                    # Pass BMI if available
-                    bmi = measurement.get('bmi')
-
-                    success = self.garmin.add_weight(
-                        weight_kg=measurement['weight'],
-                        timestamp=measurement['timestamp'],
-                        bmi=bmi
-                    )
-                    if success:
-                        synced_count += 1
-                        bmi_str = f", BMI {bmi:.2f}" if bmi else ""
-                        logger.info(
-                            f"Synced weight: {measurement['weight']}kg{bmi_str} at "
-                            f"{measurement['timestamp'].isoformat()}"
-                        )
-                except Exception as e:
-                    logger.error(f"Failed to sync measurement: {str(e)}")
-                    continue
-
-            skipped = len(withings_measurements) - synced_count
-
-            logger.info(f"Sync complete: {synced_count} synced, {skipped} skipped")
-
+        if not new_measurements:
+            logger.info("No new measurements since %s", since.isoformat())
             return {
-                'synced': synced_count,
-                'skipped': skipped,
-                'message': f'Successfully synced {synced_count} measurements'
+                "synced": 0,
+                "skipped": 0,
+                "errors": 0,
+                "processed": [],
+                "high_water_mark": since,
+                "message": "no new measurements",
             }
 
-        except Exception as e:
-            logger.error(f"Error during sync: {str(e)}", exc_info=True)
-            raise
+        if len(new_measurements) > self.MAX_ENTRIES_PER_SYNC:
+            logger.warning(
+                "Found %d new measurements, limiting to %d for safety",
+                len(new_measurements), self.MAX_ENTRIES_PER_SYNC,
+            )
+            new_measurements = new_measurements[: self.MAX_ENTRIES_PER_SYNC]
 
-    def sync_recent_weights(self, days: int = 7) -> Dict:
-        """
-        Sync recent weights from the last N days
+        synced = 0
+        errors = 0
+        processed = []
+        high_water = since
 
-        Args:
-            days: Number of days to look back
+        for m in new_measurements:
+            ts = m["timestamp"]
+            wt = m["weight"]
 
-        Returns:
-            Dict with sync results
-        """
-        logger.info(f"Starting manual sync for last {days} days")
-        return self.sync_weights()
+            if dry_run:
+                logger.info("[dry-run] would upload %.2fkg at %s", wt, ts.isoformat())
+                processed.append({"timestamp": ts.isoformat(), "weight": wt, "result": "dry-run"})
+                if ts > high_water:
+                    high_water = ts
+                continue
+
+            result = garmin_writer.upload_weight(weight_kg=wt, timestamp=ts)
+
+            if result["success"]:
+                synced += 1
+                logger.info(
+                    "Uploaded %.2fkg at %s -- %s", wt, ts.isoformat(), result["reason"],
+                )
+                if ts > high_water:
+                    high_water = ts
+            else:
+                errors += 1
+                logger.error(
+                    "Failed to upload %.2fkg at %s: %s", wt, ts.isoformat(), result["reason"],
+                )
+
+            processed.append({
+                "timestamp": ts.isoformat(),
+                "weight": wt,
+                "result": result["action"],
+                "reason": result["reason"],
+            })
+
+        return {
+            "synced": synced,
+            "skipped": 0,
+            "errors": errors,
+            "processed": processed,
+            "high_water_mark": high_water,
+            "message": f"synced {synced}, errors {errors}",
+        }

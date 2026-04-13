@@ -1,15 +1,7 @@
-﻿# Web framework
-Flask==3.0.0
+# Local-daemon dependencies (post-Lambda cutover, 2026-04-13).
+# All Garmin Connect calls now go through garmin-connect-mcp via subprocess,
+# so the heavyweight garth/garminconnect/pydantic stack is gone.
 
-# API clients
-# NOTE: withings-api requires pydantic<2.0, so we pin garth to 0.4.x which supports pydantic v1
-withings-api==2.4.0
-garminconnect==0.2.19
-garth>=0.4.46,<0.5.0
-pydantic>=1.10.12,<2.0.0
-
-# Configuration
+requests>=2.31.0
 python-dotenv==1.0.0
-
-# Optional: for better logging and debugging
 colorlog==6.8.0
