@@ -86,7 +86,6 @@ class WithingsClient:
             params = {
                 "action": "getmeas",
                 "access_token": self.access_token,
-                "meastype": 1,  # Weight
                 "category": 1,  # Real measurements
                 "startdate": start_timestamp,
                 "enddate": end_timestamp,
@@ -121,9 +120,16 @@ class WithingsClient:
                 else:
                     continue
 
-                # Parse measures
+                # Parse measures -- Withings measure types:
+                # 1=weight(kg), 4=height(m), 6=fat%, 54=hydration%,
+                # 71=bone mass(kg), 73=muscle mass(kg), 76=visceral fat index
                 weight_kg = None
                 height_m = None
+                percent_fat = None
+                percent_hydration = None
+                bone_mass = None
+                muscle_mass = None
+                visceral_fat = None
 
                 for measure in group.get("measures", []):
                     measure_type = measure.get("type")
@@ -133,29 +139,40 @@ class WithingsClient:
                     if value is None or unit is None:
                         continue
 
-                    # Calculate actual value
                     actual_value = value * (10 ** unit)
 
-                    if measure_type == 1:  # Weight in kg
+                    if measure_type == 1:
                         weight_kg = actual_value
-                    elif measure_type == 4:  # Height in meters
+                    elif measure_type == 4:
                         height_m = actual_value
+                    elif measure_type == 6:
+                        percent_fat = actual_value
+                    elif measure_type == 54:
+                        percent_hydration = actual_value
+                    elif measure_type == 71:
+                        bone_mass = actual_value
+                    elif measure_type == 73:
+                        muscle_mass = actual_value
+                    elif measure_type == 76:
+                        visceral_fat = actual_value
 
-                # Only add if we have weight data
                 if weight_kg is not None:
                     measurement = {
                         'timestamp': timestamp,
-                        'weight': weight_kg
+                        'weight': weight_kg,
+                        'percent_fat': percent_fat,
+                        'percent_hydration': percent_hydration,
+                        'bone_mass': bone_mass,
+                        'muscle_mass': muscle_mass,
+                        'visceral_fat': visceral_fat,
                     }
 
-                    # Calculate BMI if we have both weight and height
                     if height_m is not None and height_m > 0:
-                        bmi = weight_kg / (height_m ** 2)
-                        measurement['bmi'] = bmi
+                        measurement['bmi'] = weight_kg / (height_m ** 2)
                         measurement['height'] = height_m
-                        logger.debug(f"Found measurement: {weight_kg}kg, height {height_m}m, BMI {bmi:.2f} at {timestamp}")
-                    else:
-                        logger.debug(f"Found measurement: {weight_kg}kg at {timestamp}")
+
+                    body_comp_fields = sum(1 for v in [percent_fat, percent_hydration, bone_mass, muscle_mass, visceral_fat] if v is not None)
+                    logger.debug(f"Found measurement: {weight_kg}kg + {body_comp_fields} body comp fields at {timestamp}")
 
                     results.append(measurement)
 

@@ -94,7 +94,15 @@ class SyncService:
                     high_water = ts
                 continue
 
-            result = garmin_writer.upload_weight(weight_kg=wt, timestamp=ts)
+            result = garmin_writer.upload(
+                weight_kg=wt,
+                timestamp=ts,
+                percent_fat=m.get("percent_fat"),
+                percent_hydration=m.get("percent_hydration"),
+                bone_mass=m.get("bone_mass"),
+                muscle_mass=m.get("muscle_mass"),
+                visceral_fat_rating=m.get("visceral_fat"),
+            )
 
             if result["success"]:
                 synced += 1

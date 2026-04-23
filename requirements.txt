@@ -1,7 +1,7 @@
-# Local-daemon dependencies (post-Lambda cutover, 2026-04-13).
-# All Garmin Connect calls now go through garmin-connect-mcp via subprocess,
-# so the heavyweight garth/garminconnect/pydantic stack is gone.
+# Local-daemon dependencies (post-garmin-bridge cutover, 2026-04-23).
+# Garmin Connect calls go through garmin-bridge (DI OAuth2 + curl_cffi).
 
 requests>=2.31.0
 python-dotenv==1.0.0
 colorlog==6.8.0
+garmin-bridge @ file:///E:/projects/garmin-bridge
