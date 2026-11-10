@@ -4,9 +4,20 @@ Handles authentication and data retrieval from Withings using raw requests
 Based on withings-sync implementation to avoid pydantic conflicts
 """
 import logging
-import requests
+import socket
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict
+
+import requests
+import urllib3.util.connection
+
+# IPv4 only. urllib3 has no Happy Eyeballs: when SPARKY holds global IPv6
+# addresses but the house has no working IPv6 route (from 2026-11-08 ~20:00),
+# every new connection to wbsapi.withings.net waited out its IPv6 address
+# (~21 s) before trying IPv4. Withings is fully reachable over IPv4.
+# Process-wide by design; garmin-bridge uses curl_cffi, which is unaffected.
+# Same fix as strava-tagger's strava_client (2026-11-10).
+urllib3.util.connection.allowed_gai_family = lambda: socket.AF_INET
 
 logger = logging.getLogger(__name__)
 
