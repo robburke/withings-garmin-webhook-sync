@@ -11,8 +11,9 @@ from typing import List, Dict
 import requests
 import urllib3.util.connection
 
-# IPv4 only. urllib3 has no Happy Eyeballs: when SPARKY holds global IPv6
-# addresses but the house has no working IPv6 route (from 2026-11-08 ~20:00),
+# IPv4 only. urllib3 has no Happy Eyeballs: when SPARKY's default IPv6
+# source does not route (from 2026-11-08 ~20:00 the router advertised a second,
+# non-routing subnet and Windows picked it; see the vault Home Network note),
 # every new connection to wbsapi.withings.net waited out its IPv6 address
 # (~21 s) before trying IPv4. Withings is fully reachable over IPv4.
 # Process-wide by design; garmin-bridge uses curl_cffi, which is unaffected.
